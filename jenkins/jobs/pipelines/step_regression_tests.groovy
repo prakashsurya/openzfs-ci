@@ -26,6 +26,8 @@ node('master') {
     stash(name: 'openzfs-ci', includes: "${OPENZFSCI_DIRECTORY}/**")
 }
 
+JOBS = []
+
 try {
     create_commit_status(env.JOB_NAME, 'pending', "OpenZFS testing of commit ${OPENZFS_COMMIT_SHORT} in progress.")
 
@@ -45,9 +47,8 @@ try {
                 [$class: 'StringParameterValue', name: 'BUILDER', value: BUILDER],
             ])
 
-            post_job_status(job, commit_directory, pull_directory, '01-create-builder',
+            process_job_with_error_checking(job, commit_directory, pull_directory, '01-create-builder',
                 'Creation of the build machine has finished.')
-            error_if_job_result_not_success(job)
         }
 
         stage('checkout') {
@@ -66,9 +67,8 @@ try {
 
             env.BUILDER_WORKSPACE = job.rawBuild.environment.get('WORKSPACE')
 
-            post_job_status(job, commit_directory, pull_directory, '02-checkout',
+            process_job_with_error_checking(job, commit_directory, pull_directory, '02-checkout',
                 "Checkout of commit ${OPENZFS_COMMIT_SHORT} has finished.")
-            error_if_job_result_not_success(job)
         }
 
         if (!env.BUILDER_WORKSPACE)
@@ -85,9 +85,8 @@ try {
                     nodeEligibility: [$class: 'AllNodeEligibility']],
             ])
 
-            post_job_status(job, commit_directory, pull_directory, '03-build',
+            process_job_with_error_checking(job, commit_directory, pull_directory, '03-build',
                 "Build of commit ${OPENZFS_COMMIT_SHORT} has finished.")
-            error_if_job_result_not_success(job)
         }
 
         stage('nits') {
@@ -102,9 +101,8 @@ try {
                     nodeEligibility: [$class: 'AllNodeEligibility']],
             ])
 
-            post_job_status(job, commit_directory, pull_directory, '04-nits',
+            process_job_with_error_checking(job, commit_directory, pull_directory, '04-nits',
                 "Checking nits of commit ${OPENZFS_COMMIT_SHORT} has finished.")
-            error_if_job_result_not_success(job)
         }
 
         stage('install') {
@@ -118,9 +116,8 @@ try {
                     nodeEligibility: [$class: 'AllNodeEligibility']],
             ])
 
-            post_job_status(job, commit_directory, pull_directory, '05-install',
+            process_job_with_error_checking(job, commit_directory, pull_directory, '05-install',
                 "Installation of commit ${OPENZFS_COMMIT_SHORT} has finished.")
-            error_if_job_result_not_success(job)
         }
     } finally {
         stage('unregister-builder') {
@@ -135,9 +132,8 @@ try {
                 [$class: 'StringParameterValue', name: 'BUILDER', value: BUILDER],
             ])
 
-            post_job_status(job, commit_directory, pull_directory, '06-unregister-builder',
+            process_job_with_error_checking(job, commit_directory, pull_directory, '06-unregister-builder',
                 'Unregistration of the build machine has finished.')
-            error_if_job_result_not_success(job)
         }
     }
 
@@ -153,9 +149,8 @@ try {
             [$class: 'StringParameterValue', name: 'BUILDER_SNAPSHOT', value: BUILDER_SNAPSHOT],
         ])
 
-        post_job_status(job, commit_directory, pull_directory, '07-snapshot-builder',
+        process_job_with_error_checking(job, commit_directory, pull_directory, '07-snapshot-builder',
             'Snapshotting the build machine has finished.')
-        error_if_job_result_not_success(job)
     }
 
     try {
@@ -174,9 +169,8 @@ try {
                 [$class: 'StringParameterValue', name: 'ZFSTEST_TESTER', value: ZFSTEST_TESTER],
             ])
 
-            post_job_status(job, commit_directory, pull_directory, '08-create-testers',
+            process_job_with_error_checking(job, commit_directory, pull_directory, '08-create-testers',
                 'Creation of the test machines has finished.')
-            error_if_job_result_not_success(job)
         }
 
         stage('run-tests') {
@@ -192,7 +186,7 @@ try {
                         nodeEligibility: [$class: 'AllNodeEligibility']],
                 ])
 
-                post_job_status(job, commit_directory, pull_directory, '09-zloop',
+                process_job_without_error_checking(job, commit_directory, pull_directory, '09-zloop',
                     "Run of 'zloop' for commit ${OPENZFS_COMMIT_SHORT} has finished.")
                 post_remote_job_test_results(job,
                     commit_directory, pull_directory, '09-zloop-results', 'zloop', '/var/tmp/test_results')
@@ -211,7 +205,7 @@ try {
                         nodeEligibility: [$class: 'AllNodeEligibility']],
                 ])
 
-                post_job_status(job, commit_directory, pull_directory, '10-zfstest',
+                process_job_without_error_checking(job, commit_directory, pull_directory, '10-zfstest',
                     "Run of 'zfstest' for commit ${OPENZFS_COMMIT_SHORT} has finished.")
                 post_remote_job_test_results(job,
                     commit_directory, pull_directory, '10-zfstest-results', 'zfstest', '/var/tmp/test_results')
@@ -234,9 +228,8 @@ try {
                 [$class: 'StringParameterValue', name: 'ZFSTEST_TESTER', value: ZFSTEST_TESTER],
             ])
 
-            post_job_status(job, commit_directory, pull_directory, '11-unregister-testers',
+            process_job_with_error_checking(job, commit_directory, pull_directory, '11-unregister-testers',
                 'Unregistration of the test machines has finished.')
-            error_if_job_result_not_success(job)
         }
     }
 
@@ -244,16 +237,50 @@ try {
 } catch (e) {
     create_commit_status(env.JOB_NAME, 'failure', "OpenZFS testing of commit ${OPENZFS_COMMIT_SHORT} failed.")
     throw e
+} finally {
+    /*
+     * TODO: Do something useful with the JOBS array; e.g. populate an HTML template with the information
+     * contained in the array, that can be used as a "landing page" for the test results, and will link to the
+     * results for each specific step. This "landing page" can then be uploaded to Manta, and linked off the
+     * GitHub pull request and/or commit using commit statuses.
+     *
+     * Additionally, if/when this "landing page" is implemented, we can drop the commit statuses for the steps
+     * in the testing process that are largely irrelevant to OpenZFS contributers; e.g. "create builder",
+     * "create testers", etc. Without this "landing page" idea, we have no other way to link the results of
+     * these steps with the pull request and/or commit, so this was our best option at the time; even though
+     * they clutter the interface, and make the "real" and/or "useful" test results more difficult to find.
+     */
 }
 
-def post_job_status(job, commit_directory, pull_directory, context, description) {
+def process_job_impl(job, commit_directory, pull_directory, context, description, error_checking) {
     def url = upload_job_console(job, commit_directory, pull_directory)
 
     def state = 'failure'
     if (job.result == 'SUCCESS')
         state = 'success'
 
+    /*
+     * TODO: This only supports the console page's URL; still need to support the "results" and "log" URLs.
+     */
+    JOBS.add([
+        'object': job,
+        'name': job.projectName,
+        'state': state,
+        'url': url
+    ])
+
     create_commit_status(context, state, description, url)
+
+    if (error_checking)
+        error_if_job_result_not_success(job)
+}
+
+def process_job_with_error_checking(job, commit_directory, pull_directory, context, description) {
+    return process_job_impl(job, commit_directory, pull_directory, context, description, true)
+}
+
+def process_job_without_error_checking(job, commit_directory, pull_directory, context, description) {
+    return process_job_impl(job, commit_directory, pull_directory, context, description, false)
 }
 
 def error_if_job_result_not_success(job) {

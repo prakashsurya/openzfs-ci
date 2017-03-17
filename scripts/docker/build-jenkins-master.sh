@@ -7,7 +7,4 @@ if [[ -z "$TOP" ]]; then
 	exit 1
 fi
 
-ansible-galaxy install \
-	-r $TOP/ansible/requirements.yml \
-	-p $TOP/ansible/roles \
-	--force
+docker build -t "openzfs/jenkins-master:latest" "$TOP/docker/jenkins-master"
